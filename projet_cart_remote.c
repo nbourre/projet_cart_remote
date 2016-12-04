@@ -36,26 +36,39 @@ struct Nunchuck {
     int bc;
 };
 
+void setProgState(progState);
+void manageComm(void);
+
 // Variables globales;
-volatile struct Nunchuck nunchuck;
-
-
 int blinkEnabled = 0;
 int blinkAcc = 0;
 
-int btnCPressTime = 0;
 
+// Nunchuck variables
+volatile struct Nunchuck nunchuck;
+
+int btnCPressTime = 0;
 int x_min = 128;
 int x_max = 128;
 int y_min = 128;
 int y_max = 128;
-
 double slopeX = 1;
 double slopeY = 1;
+
+int xDeadZone = 16;
+int yDeadZone = 16;
+int rotateValue = 0;
+int moveValue = 0;
+
+// Output values
+int rwValue = 128;
+int lwValue = 128;
 
 long commTicks = 0;
 int commInt = 3000;
 int rxFlag = 0;
+long aliveAcc = 0;
+int aliveHeartBeat = 5; // Envoie la communication à toutes les 5 ms
 
 void InitRPs()
 {
@@ -128,7 +141,7 @@ void _ISRFAST __attribute__((auto_psv)) _T1Interrupt(void)
 {
   if(nb_ms > 0)   --nb_ms;
   commTicks++;
-  
+  aliveAcc++;
   
   _T1IF = 0;
 }
@@ -206,36 +219,58 @@ void calibrate() {
 }
 
 void modeRunning() {
-    if (nunchuck.bc > 630)
-    {
-      _RB15 = 1;
-    }
-    else
-    {
-      _RB15 = 0;
-    }
-    
     // Transition vers etat de configuration
     if (btnCPressTime > 150) {
         btnCPressTime = 0;
+        _RB14 = 0;
+        _RB15 = 1;
         
-        currentState = CONFIG_MODE;
+        setProgState(CONFIG_MODE);
     }
     
-    setOC1(nunchuck.jx * slopeX);
+    // Src http://www.virtualroadside.com/WPILib/class_robot_drive.html#ac95118d7b535c4f3fb3d56ba5b041e40
+    rotateValue = moveValue = 0;
+    
+    if (nunchuck.jy > 128 + yDeadZone) {
+        
+        if (nunchuck.jx > 128 + xDeadZone) {
+            lwValue = nunchuck.jy - nunchuck.jx;
+            rwValue = nunchuck.jy > nunchuck.jx ? nunchuck.jy : nunchuck.jx;
+        } else if (nunchuck.jx < 128 - xDeadZone) {
+            lwValue = nunchuck.jy > nunchuck.jx ? nunchuck.jy : nunchuck.jx;
+            rwValue = nunchuck.jy + nunchuck.jx;
+        }
+    } else if (nunchuck.jy < 128 - yDeadZone) {
+        if (nunchuck.jx > 128 + xDeadZone) {
+            
+        } else if (nunchuck.jx < 128 - xDeadZone) {
+            
+        }
+    }
+
+    
+
+//    if (nunchuck.jy > 128 - yDeadZone && nunchuck.jy < 128 + yDeadZone) {
+//        rwValue = lwValue = 128;
+//    } else {
+//        rwValue = lwValue = nunchuck.jy;
+//    }
+
 }
+
 
 void modeConfig() {
     // Transition vers etat d'execution
     if (btnCPressTime > 150) {
         btnCPressTime = 0;
         
-        currentState = RUNNING_MODE;
+        setProgState(RUNNING_MODE);
     }
 
     if (blinkAcc > 25) {
         blinkAcc = 0;
         _RB15 = ~_RB15;
+        _RB14 = ~_RB14;
     }
     
     int dirtyData = 0;
@@ -248,8 +283,7 @@ void modeConfig() {
     if (nunchuck.jx > x_max) {
         x_max = nunchuck.jx;
         dirtyData = 1;
-    }
-    
+    }    
     if (nunchuck.jy < y_min) {
         y_min = nunchuck.jy;
         dirtyData = 1;
@@ -263,6 +297,25 @@ void modeConfig() {
     if (dirtyData) {
         calibrate();
     }
+    
+}
+
+void manageComm() {
+    
+    if (aliveAcc < aliveHeartBeat) {
+        return;
+    }
+    
+    aliveAcc = 0;
+
+    if (currentState == RUNNING_MODE) {
+        SendChar(0x55);
+        SendChar(rwValue);
+        SendChar(lwValue);
+    } else {
+        SendChar(0x00);
+    }
+    
     
 }
 
@@ -306,6 +359,10 @@ void initRxTx() {
 #endif
 }
 
+void setProgState(progState newState) {
+    currentState = newState;
+}
+
 int main(void)
 {
   unsigned char donnees[6], i;
@@ -320,110 +377,66 @@ int main(void)
   
   initRxTx();
   
-
-  
   initTimers();
   initOC1();
-  _RB14 = 0;
-  _RB15 = 0;
+
+  PORTB = 0x0000;
   
-//  I2C_Initialisation();
-//  
-//  Delai(50);
-//  
-//  I2C_ConditionDemarrage();
-//  I2C_Adresse(0x52, 0);
-//  I2C_EnvoiOctet(0xF0);       // Sequence compatible aux deux modeles sans encodage
-//  I2C_EnvoiOctet(0x55);
-//  I2C_ConditionArret();
-//  
-//  Delai(10);
-//  
-//  I2C_ConditionDemarrage();
-//  I2C_Adresse(0x52, 1);
-//  I2C_LireOctets(donnees,6);
-//  I2C_ConditionArret();
-//  
+  I2C_Initialisation();
+  
+  Delai(50);
+  
+  I2C_ConditionDemarrage();
+  I2C_Adresse(0x52, 0);
+  I2C_EnvoiOctet(0xF0);       // Sequence compatible aux deux modeles sans encodage
+  I2C_EnvoiOctet(0x55);
+  I2C_ConditionArret();
+  
+  Delai(10);
+  
+  I2C_ConditionDemarrage();
+  I2C_Adresse(0x52, 1);
+  I2C_LireOctets(donnees,6);
+  I2C_ConditionArret();
+  
   while (1)
-  {
-      
-      if (commTicks > commInt) {
-          commTicks = 0;
-          _RB15 = ~_RB15;
-          
-          SendChar('w');
-      }
-      
-      if (rxFlag) {
-          rxFlag = 0;
-          _RB14 = ~_RB14;
-      }
+  {      
+    if (rxFlag) {
+        // Gérer la communication entrante ici
+        rxFlag = 0;
+
+    }
     
-//    Delai(1);
-//    
-//    I2C_ConditionDemarrage();
-//    I2C_Adresse(0x52, 0);
-//    I2C_EnvoiOctet(0x00);
-//    I2C_ConditionArret();
-//    
-//    Delai(1);
-//    
-//    I2C_ConditionDemarrage();
-//    I2C_Adresse(0x52, 1);
-//    I2C_LireOctets(donnees,6);
-//    I2C_ConditionArret();
-//    
-//    
-//    // Communication avec GRAccel.exe
-//    SendChar(0x5A);
-//    
-//    for(i = 0; i < 6; ++i) {
-//      SendChar(donnees[i]);
-//    }
-//    
-//    nunchuck = convertNunchuckData(donnees);
-//    
-//  
-//    manageSystem();
+    Delai(1);
+    
+    I2C_ConditionDemarrage();
+    I2C_Adresse(0x52, 0);
+    I2C_EnvoiOctet(0x00);
+    I2C_ConditionArret();
+    
+    Delai(1);
+    
+    I2C_ConditionDemarrage();
+    I2C_Adresse(0x52, 1);
+    I2C_LireOctets(donnees,6);
+    I2C_ConditionArret();
+    
+    nunchuck = convertNunchuckData(donnees);
+
+    manageSystem();
+    manageComm();
     
   }
   return 0;
 }
 
 
+
+
 void __attribute__((__interrupt__, no_auto_psv)) _U1RXInterrupt(void)
 {
     rxFlag = 1;
     
-//    rxChar = U1RXREG;   //Appel la fonction de lecture
-//    
-//    
-//    
-//    if (rxChar == 'w') {
-//        forward = ~forward;
-//        _RB7 = ~_RB7;
-//    }
-//    
-//    // Mettre en mode config
-//    if (rxChar == 'c') {
-//        if (currentCartState == CONFIG_MODE ) {
-//            currentCartState = RUNNING_MODE;
-//        } else {
-//            currentCartState = CONFIG_MODE;
-//        }
-//    }
-//    
-//    if (currentCartState == CONFIG_MODE ) {
-//        if (rxChar == 's') {
-//            speedCalibFlag = 1;
-//            rTicks = 0;
-//            lTicks = 0;
-//            rwAcc = 0;
-//            lwAcc = 0;
-//        }
-//    } else if (currentCartState == RUNNING_MODE) {
-//        
-//    }
     
     
     
