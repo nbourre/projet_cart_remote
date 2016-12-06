@@ -48,6 +48,9 @@ int blinkAcc = 0;
 volatile struct Nunchuck nunchuck;
 
 int btnCPressTime = 0;
+int btnCnZPressTime = 0;
+int btnZPressTime = 0;
+
 int x_min = 128;
 int x_max = 128;
 int y_min = 128;
@@ -57,8 +60,8 @@ double slopeY = 1;
 
 int xDeadZone = 16;
 int yDeadZone = 16;
-int rotateValue = 0;
-int moveValue = 0;
+double rotateValue = 0;
+double moveValue = 0;
 
 // Output values
 int rwValue = 128;
@@ -139,9 +142,34 @@ volatile unsigned long  nb_ms = 0;
 // Toutes les ms
 void _ISRFAST __attribute__((auto_psv)) _T1Interrupt(void)
 {
-  if(nb_ms > 0)   --nb_ms;
-  commTicks++;
-  aliveAcc++;
+    if(nb_ms > 0)   --nb_ms;
+    commTicks++;
+    aliveAcc++;
+  
+    if (nunchuck.bz && nunchuck.bc) {
+        btnCnZPressTime++;
+    } else {
+        
+        btnCnZPressTime = 0;
+        
+        if (nunchuck.bc) {
+            btnCPressTime++;
+            
+        } else {
+            btnCPressTime = 0;
+        }
+
+        if (nunchuck.bz) {
+            btnZPressTime++;
+        } else {
+            btnZPressTime = 0;
+        }
+    }
+    
+    
+    if (currentState == CONFIG_MODE) {
+        blinkAcc++;
+    }
   
   _T1IF = 0;
 }
@@ -150,15 +178,9 @@ void _ISRFAST __attribute__((auto_psv)) _T1Interrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _T2Interrupt(void)
 {
     
-    if (nunchuck.bc) {
-        btnCPressTime++;
-    } else {
-        btnCPressTime = 0;
-    }
+
     
-    if (currentState == CONFIG_MODE) {
-        blinkAcc++;
-    }
+
     
 	IFS0bits.T2IF = 0;
 }
@@ -220,49 +242,49 @@ void calibrate() {
 
 void modeRunning() {
     // Transition vers etat de configuration
-    if (btnCPressTime > 150) {
-        btnCPressTime = 0;
+    if (btnCnZPressTime > 3000) {
+        btnCnZPressTime = 0;
         _RB14 = 0;
         _RB15 = 1;
         
         setProgState(CONFIG_MODE);
     }
     
-    // Src http://www.virtualroadside.com/WPILib/class_robot_drive.html#ac95118d7b535c4f3fb3d56ba5b041e40
-    rotateValue = moveValue = 0;
+    if (btnCPressTime > 1000) {
+        btnCPressTime = 0;
+        rwValue = '!'; // Si les deux sont à 127, on entre en mode auto
+        rwValue = 'x';
+        _RB14 = _RB15 = 1;
+    } else {
     
-    if (nunchuck.jy > 128 + yDeadZone) {
+        // Src http://www.virtualroadside.com/WPILib/class_robot_drive.html#ac95118d7b535c4f3fb3d56ba5b041e40
+        rotateValue = moveValue = 0;
+
+        if (nunchuck.jx > 128 - xDeadZone && nunchuck.jx < 128 + xDeadZone) {
+            rotateValue = 0;
+        } else {
+            rotateValue = (nunchuck.jx * 1.0) / 128 - 1;
+        }
+
+        if (nunchuck.jy > 128 - yDeadZone && nunchuck.jy < 128 + yDeadZone) {
+            moveValue = 0;
+        } else {
+            moveValue = (nunchuck.jy * 1.0) / 128 - 1;
+        }
+
+        lwValue = 255 - ((moveValue + rotateValue) + 1) * 128 ;
+        rwValue = 255 - ((moveValue - rotateValue) + 1) * 128;
         
-        if (nunchuck.jx > 128 + xDeadZone) {
-            lwValue = nunchuck.jy - nunchuck.jx;
-            rwValue = nunchuck.jy > nunchuck.jx ? nunchuck.jy : nunchuck.jx;
-        } else if (nunchuck.jx < 128 - xDeadZone) {
-            lwValue = nunchuck.jy > nunchuck.jx ? nunchuck.jy : nunchuck.jx;
-            rwValue = nunchuck.jy + nunchuck.jx;
-        }
-    } else if (nunchuck.jy < 128 - yDeadZone) {
-        if (nunchuck.jx > 128 + xDeadZone) {
-            
-        } else if (nunchuck.jx < 128 - xDeadZone) {
-            
-        }
+
     }
-
     
-
-//    if (nunchuck.jy > 128 - yDeadZone && nunchuck.jy < 128 + yDeadZone) {
-//        rwValue = lwValue = 128;
-//    } else {
-//        rwValue = lwValue = nunchuck.jy;
-//    }
-
 }
 
 
 void modeConfig() {
     // Transition vers etat d'execution
-    if (btnCPressTime > 150) {
-        btnCPressTime = 0;
+    if (btnCnZPressTime > 3000) {
+        btnCnZPressTime = 0;
         
         setProgState(RUNNING_MODE);
     }
@@ -321,6 +343,21 @@ void manageComm() {
 
 
 void manageSystem() {
+    
+    if (nunchuck.bz) {
+
+        rwValue = lwValue = 128;
+        _RB14 = _RB15 = 1;
+        return;
+    }
+    
+    if (btnCPressTime > 1000) {
+        btnCPressTime = 0;
+        rwValue = '!';
+        lwValue = 'x';
+        return;
+    }
+    
     switch (currentState) {
         case RUNNING_MODE:
             modeRunning();
