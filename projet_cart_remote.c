@@ -38,10 +38,16 @@ struct Nunchuck {
 
 void setProgState(progState);
 void manageComm(void);
+void manageSystem(void);
+void manageBlinking(void);
+void blinkingSetDelay (int, int);
 
 // Variables globales;
-int blinkEnabled = 0;
-int blinkAcc = 0;
+unsigned int blinkRedAcc = 0;
+int blinkRedDelay = 0;
+
+unsigned int blinkGreenAcc = 0;
+int blinkGreenDelay = 0;
 
 
 // Nunchuck variables
@@ -73,7 +79,9 @@ int rxFlag = 0;
 long aliveAcc = 0;
 int aliveHeartBeat = 5; // Envoie la communication à toutes les 5 ms
 
-void InitRPs()
+int config_delay = 2000;
+
+void initRPs()
 {
   // Unlock registers
   asm volatile ( 	"MOV #OSCCON,W1 \n"
@@ -145,31 +153,33 @@ void _ISRFAST __attribute__((auto_psv)) _T1Interrupt(void)
     if(nb_ms > 0)   --nb_ms;
     commTicks++;
     aliveAcc++;
+    
+    blinkRedAcc++;
+    blinkGreenAcc++;
   
     if (nunchuck.bz && nunchuck.bc) {
         btnCnZPressTime++;
+        blinkingSetDelay(100, 100);
     } else {
-        
         btnCnZPressTime = 0;
         
         if (nunchuck.bc) {
             btnCPressTime++;
-            
         } else {
             btnCPressTime = 0;
+            
         }
 
         if (nunchuck.bz) {
             btnZPressTime++;
+            
         } else {
             btnZPressTime = 0;
+            
         }
     }
     
     
-    if (currentState == CONFIG_MODE) {
-        blinkAcc++;
-    }
   
   _T1IF = 0;
 }
@@ -186,7 +196,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T2Interrupt(void)
 }
 
 
-void Delai(int ms)
+void delay(int ms)
 {
   nb_ms = ms;
   while(nb_ms > 0);
@@ -197,18 +207,6 @@ void SendChar(unsigned char c)
   while(U1STAbits.UTXBF);
   U1TXREG = c;
 }
-
-// Format des données
-// jx = donnees[0];
-// jy = donnees[1];
-// ax = (donnees[2] << 2) + ((donnees[5] & 0x0C) >> 2);
-// ay = (donnees[3] << 2) + ((donnees[5] & 0x30) >> 4);
-// az = (donnees[4] << 2) + ((donnees[5] & 0xC0) >> 6);
-// bz = (donnees[5] & 0x01) >> 0;
-// bc = (donnees[5] & 0x02) >> 1;
-
-
-
 
 
 struct Nunchuck convertNunchuckData(unsigned char data[6]) {
@@ -242,19 +240,29 @@ void calibrate() {
 
 void modeRunning() {
     // Transition vers etat de configuration
-    if (btnCnZPressTime > 3000) {
+    if (btnCnZPressTime > config_delay) {
         btnCnZPressTime = 0;
-        _RB14 = 0;
-        _RB15 = 1;
+        
+        blinkingSetDelay(200, 200);
         
         setProgState(CONFIG_MODE);
+        return;
+    } else if (btnCnZPressTime > 0) {
+        blinkingSetDelay(100, 200);
+        return;
     }
     
-    if (btnCPressTime > 1000) {
+    blinkingSetDelay(1000, 1000);
+    
+    if (btnCPressTime > 500) {
         btnCPressTime = 0;
+        
+        
         rwValue = '!'; // Si les deux sont à 127, on entre en mode auto
-        rwValue = 'x';
-        _RB14 = _RB15 = 1;
+        lwValue = 'x';
+        _RB13 = _RB15 = 1;
+        return;
+
     } else {
     
         // Src http://www.virtualroadside.com/WPILib/class_robot_drive.html#ac95118d7b535c4f3fb3d56ba5b041e40
@@ -272,27 +280,28 @@ void modeRunning() {
             moveValue = (nunchuck.jy * 1.0) / 128 - 1;
         }
 
-        lwValue = 255 - ((moveValue + rotateValue) + 1) * 128 ;
-        rwValue = 255 - ((moveValue - rotateValue) + 1) * 128;
-        
-
+        rwValue = 255 - ((moveValue + rotateValue) + 1) * 128 ;
+        lwValue = 255 - ((moveValue - rotateValue) + 1) * 128;
+        return;
     }
+    
+
     
 }
 
 
 void modeConfig() {
     // Transition vers etat d'execution
-    if (btnCnZPressTime > 3000) {
+    if (btnCnZPressTime > config_delay) {
         btnCnZPressTime = 0;
         
+        blinkingSetDelay(1000, 1000);
+        
         setProgState(RUNNING_MODE);
-    }
-
-    if (blinkAcc > 25) {
-        blinkAcc = 0;
-        _RB15 = ~_RB15;
-        _RB14 = ~_RB14;
+        return;
+    } else if (btnCnZPressTime > 0) {
+        blinkingSetDelay(200, 200);
+        return;
     }
     
     int dirtyData = 0;
@@ -319,7 +328,23 @@ void modeConfig() {
     if (dirtyData) {
         calibrate();
     }
+}
+
+void blinkingSetDelay (int red, int green) {
+    blinkRedDelay = red;
+    blinkGreenDelay = green;
+}
+
+void manageBlinking() {
+    if (blinkRedAcc > blinkRedDelay) {
+        blinkRedAcc = 0;
+        _RB13 = ~_RB13;
+    }
     
+    if (blinkGreenAcc > blinkGreenDelay) {
+        blinkGreenAcc = 0;
+        _RB15 = ~_RB15;
+    }
 }
 
 void manageComm() {
@@ -344,19 +369,15 @@ void manageComm() {
 
 void manageSystem() {
     
-    if (nunchuck.bz) {
-
+    // Arrêt d'urgence
+    if (btnZPressTime > 0) {
+        btnZPressTime = 0;
+        
         rwValue = lwValue = 128;
-        _RB14 = _RB15 = 1;
         return;
     }
     
-    if (btnCPressTime > 1000) {
-        btnCPressTime = 0;
-        rwValue = '!';
-        lwValue = 'x';
-        return;
-    }
+    
     
     switch (currentState) {
         case RUNNING_MODE:
@@ -366,7 +387,7 @@ void manageSystem() {
             modeConfig();
             break;
         default:
-            modeRunning();
+            rwValue = lwValue = 128;
             break;
     }
 }
@@ -402,11 +423,11 @@ void setProgState(progState newState) {
 
 int main(void)
 {
-  unsigned char donnees[6], i;
+  unsigned char data[6];
   //calibrate();
   
   
-  InitRPs();
+  initRPs();
   
   AD1PCFG = 0xFFFF;
   TRISA = 0x0000;
@@ -421,7 +442,7 @@ int main(void)
   
   I2C_Initialisation();
   
-  Delai(50);
+  delay(50);
   
   I2C_ConditionDemarrage();
   I2C_Adresse(0x52, 0);
@@ -429,43 +450,49 @@ int main(void)
   I2C_EnvoiOctet(0x55);
   I2C_ConditionArret();
   
-  Delai(10);
+  delay(10);
   
   I2C_ConditionDemarrage();
   I2C_Adresse(0x52, 1);
-  I2C_LireOctets(donnees,6);
+  I2C_LireOctets(data,6);
   I2C_ConditionArret();
+    
+  lwValue = rwValue = 128;
+  blinkRedDelay = blinkGreenDelay = 1000;
   
   while (1)
   {      
+      
     if (rxFlag) {
         // Gérer la communication entrante ici
         rxFlag = 0;
 
     }
     
-    Delai(1);
+    delay(1);
     
     I2C_ConditionDemarrage();
     I2C_Adresse(0x52, 0);
     I2C_EnvoiOctet(0x00);
     I2C_ConditionArret();
     
-    Delai(1);
+    delay(1);
     
     I2C_ConditionDemarrage();
     I2C_Adresse(0x52, 1);
-    I2C_LireOctets(donnees,6);
+    I2C_LireOctets(data,6);
     I2C_ConditionArret();
     
-    nunchuck = convertNunchuckData(donnees);
+    nunchuck = convertNunchuckData(data);
 
     manageSystem();
     manageComm();
+    manageBlinking();
     
   }
   return 0;
 }
+
 
 
 
